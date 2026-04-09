@@ -1,11 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
-  format,
   addMonths,
   subMonths,
-  isSameDay,
   isBefore,
   isAfter,
   startOfMonth,
@@ -13,7 +11,8 @@ import {
   startOfWeek,
   endOfWeek,
   eachDayOfInterval,
-  isSameMonth
+  isSameMonth,
+  startOfDay,
 } from 'date-fns';
 
 export interface CalendarRange {
@@ -21,23 +20,26 @@ export interface CalendarRange {
   end: Date | null;
 }
 
-export interface Note {
+export interface CalendarNote {
   id: string;
   content: string;
-  dateKey: string; // ISO string for a specific day or "month-year"
+  start: string;
+  end: string;
+}
+
+function rangeOverlap(noteStart: Date, noteEnd: Date, selectionStart: Date, selectionEnd: Date) {
+  return !(isBefore(noteEnd, selectionStart) || isAfter(noteStart, selectionEnd));
 }
 
 export function useCalendarState() {
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date(2026, 3, 1)); // Default to April 2026
   const [range, setRange] = useState<CalendarRange>({ start: null, end: null });
   const [hoverDate, setHoverDate] = useState<Date | null>(null);
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<CalendarNote[]>([]);
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
     setIsMounted(true);
-    // If we wanted to track the REAL current date, we'd do it here after mount
-    // but starting at a specific month for a "Wall Calendar" mockup is often better.
   }, []);
 
   // Persistence: Load from localStorage
@@ -90,11 +92,50 @@ export function useCalendarState() {
     }
   };
 
-  const updateNote = (key: string, content: string) => {
-    setNotes(prev => ({ ...prev, [key]: content }));
+  const addNote = (content: string) => {
+    if (!range.start || !content.trim()) return;
+    const start = startOfDay(range.start);
+    const end = range.end ? startOfDay(range.end) : start;
+
+    const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? (crypto as Crypto).randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    setNotes(prev => [
+      {
+        id,
+        content: content.trim(),
+        start: start.toISOString(),
+        end: end.toISOString(),
+      },
+      ...prev,
+    ]);
+  };
+
+  const updateNote = (id: string, content: string) => {
+    setNotes(prev => prev.map(note => note.id === id ? { ...note, content } : note));
+  };
+
+  const deleteNote = (id: string) => {
+    setNotes(prev => prev.filter(note => note.id !== id));
   };
 
   const clearRange = () => setRange({ start: null, end: null });
+
+  const visibleNotes = useMemo(() => {
+    if (!range.start) {
+      return [];
+    }
+
+    const selectionStart = startOfDay(range.start);
+    const selectionEnd = startOfDay(range.end ?? range.start);
+
+    return notes.filter(note => {
+      const noteStart = startOfDay(new Date(note.start));
+      const noteEnd = startOfDay(new Date(note.end));
+      return rangeOverlap(noteStart, noteEnd, selectionStart, selectionEnd);
+    });
+  }, [notes, range]);
 
   // Get all days for the current grid (including padding from prev/next months)
   const monthStart = startOfMonth(currentMonth);
@@ -109,12 +150,15 @@ export function useCalendarState() {
     range,
     hoverDate,
     notes,
+    visibleNotes,
     days,
     nextMonth,
     prevMonth,
     handleDateClick,
     setHoverDate,
+    addNote,
     updateNote,
+    deleteNote,
     clearRange,
     isMounted,
     isSameMonth: (date: Date) => isSameMonth(date, currentMonth),
